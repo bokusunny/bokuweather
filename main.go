@@ -3,12 +3,16 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"io"
 	"io/ioutil"
 	"log"
-	"mime/multipart"
 	"net/http"
 	"os"
+
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/credentials"
+	"github.com/aws/aws-sdk-go/aws/endpoints"
+	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/s3"
 )
 
 type slackAPIResponse struct {
@@ -84,38 +88,37 @@ func main() {
 	rootURL := "https://slack.com/api/"
 	apiMethod := "users.setPhoto"
 	token := os.Getenv("SLACK_TOKEN")
-	// AWSBucket := os.Getenv("BUCKET")
-	// AWSKey := os.Getenv("KEY")
+	AWSBucket := os.Getenv("BUCKET")
+	AWSKey := os.Getenv("KEY")
 
-	// svc := s3.New(session.New(), &aws.Config{
-	// 	Region: aws.String(endpoints.ApNortheast1RegionID),
-	// })
+	sess := session.Must(session.NewSession())
+	// creds := stscreds.NewCredentials(sess, "arn:aws:iam::786206931755:user/sunny")
+	creds := credentials.NewStaticCredentials(
+		// TODO: 環境変数に
+		"AKIA3ODMVXMVSMCC7ZPV",
+		"u/Ocz2ehVk1Ia34ptCwp6ry0j1KGfkFOxOTa/dq/",
+		"",
+	)
 
-	// obj, err := svc.GetObject(&s3.GetObjectInput{
-	// 	Bucket: aws.String(AWSBucket),
-	// 	Key:    aws.String(AWSKey),
-	// })
+	svc := s3.New(sess, &aws.Config{
+		Region:      aws.String(endpoints.ApNortheast1RegionID),
+		Credentials: creds,
+	})
 
-	// if err != nil {
-	// 	log.Fatal(err.Error())
-	// }
+	obj, err := svc.GetObject(&s3.GetObjectInput{
+		Bucket: aws.String(AWSBucket),
+		Key:    aws.String(AWSKey),
+	})
 
-	// defer obj.Body.Close()
-
-	file, err := os.Open("test.jpeg")
 	if err != nil {
-		log.Fatal("[Error] Fail to open the image.")
+		log.Fatal(err.Error())
 	}
-	defer file.Close()
 
-	reqBody := &bytes.Buffer{}
-	w := multipart.NewWriter(reqBody)
-	part, err := w.CreateFormFile("image", file.Name())
-	log.Println(file.Name())
-	if _, err := io.Copy(part, file); err != nil {
-		log.Fatal("[Error] Fail to copy the file.")
-	}
-	w.Close()
+	defer obj.Body.Close()
+	log.Println("Object Size:", aws.Int64Value(obj.ContentLength))
+
+	bodyByte, err := ioutil.ReadAll(obj.Body)
+	reqBody := bytes.NewBuffer(bodyByte)
 
 	req, err := http.NewRequest(
 		"POST",
@@ -127,7 +130,7 @@ func main() {
 		log.Fatal("[Error] Fail to generate new Reqest.")
 	}
 
-	req.Header.Set("Content-type", w.FormDataContentType())
+	req.Header.Set("Content-type", "multipart/form-data")
 	req.Header.Set("Authorization", "Bearer "+token)
 
 	client := &http.Client{}
