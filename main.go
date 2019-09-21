@@ -5,10 +5,16 @@ import (
 	"encoding/json"
 	"io"
 	"io/ioutil"
-	"log"
 	"mime/multipart"
 	"net/http"
 	"os"
+
+	"github.com/aws/aws-lambda-go/lambda"
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/credentials"
+	"github.com/aws/aws-sdk-go/aws/endpoints"
+	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/s3"
 )
 
 type slackAPIResponse struct {
@@ -16,115 +22,54 @@ type slackAPIResponse struct {
 	Error string `json:"error"`
 }
 
-// func handler() (string, error) {
-// rootURL := "https://slack.com/api/"
-// apiMethod := "users.setPhoto"
-// token := os.Getenv("SLACK_TOKEN")
-
-// file, err := os.Open("test.jpeg")
-// if err != nil {
-// 	log.Fatal("[Error] Fail to open the image.")
-// }
-// defer file.Close()
-
-// reqBody := &bytes.Buffer{}
-// w := multipart.NewWriter(reqBody)
-// part, err := w.CreateFormFile("image", file.Name())
-// log.Println(file.Name())
-// if _, err := io.Copy(part, file); err != nil {
-// 	log.Fatal("[Error] Fail to copy the file.")
-// }
-// w.Close()
-
-// req, err := http.NewRequest(
-// 	"POST",
-// 	rootURL+apiMethod,
-// 	reqBody,
-// )
-
-// if err != nil {
-// 	log.Println("[Error] Fail to generate new Reqest.")
-// 	return err.Error(), nil
-// }
-
-// req.Header.Set("Content-type", "multipart/form-data")
-// req.Header.Set("Authorization", "Bearer "+token)
-
-// client := &http.Client{}
-// resp, err := client.Do(req)
-
-// if err != nil {
-// 	log.Println("[Error] Request failed.")
-// 	return err.Error(), nil
-// }
-
-// defer resp.Body.Close()
-// body, err := ioutil.ReadAll(resp.Body)
-// if err != nil {
-// 	log.Println("[Error] Failed to read response.")
-// 	return err.Error(), nil
-// }
-
-// var respJSON slackAPIResponse
-// if err = json.Unmarshal(body, &respJSON); err != nil {
-// 	log.Println("[Error] Failed to unmarshal response json.")
-// 	return err.Error(), nil
-// }
-
-// if respJSON.Ok {
-// 	// TODO: Slackに成功or失敗を通知する
-// 	return "Successfully Updated", nil
-// }
-
-// return respJSON.Error, nil
-// }
-
-func main() {
-	// lambda.Start(handler)
+func setSlackPhotoHandler() (string, error) {
 	rootURL := "https://slack.com/api/"
 	apiMethod := "users.setPhoto"
 	token := os.Getenv("SLACK_TOKEN")
-	// AWSBucket := os.Getenv("BUCKET")
-	// AWSKey := os.Getenv("KEY")
+	AWSSessionID := os.Getenv("AWS_SESSION_ID")
+	AWSSecretAccessKey := os.Getenv("AWS_SECRET")
+	AWSBucket := os.Getenv("BUCKET")
+	AWSBucketKey := os.Getenv("BUCKET_KEY")
 
-	// svc := s3.New(session.New(), &aws.Config{
-	// 	Region: aws.String(endpoints.ApNortheast1RegionID),
-	// })
+	sess := session.Must(session.NewSession())
+	creds := credentials.NewStaticCredentials(AWSSessionID, AWSSecretAccessKey, "")
 
-	// obj, err := svc.GetObject(&s3.GetObjectInput{
-	// 	Bucket: aws.String(AWSBucket),
-	// 	Key:    aws.String(AWSKey),
-	// })
+	svc := s3.New(sess, &aws.Config{
+		Region:      aws.String(endpoints.ApNortheast1RegionID),
+		Credentials: creds,
+	})
 
-	// if err != nil {
-	// 	log.Fatal(err.Error())
-	// }
+	obj, err := svc.GetObject(&s3.GetObjectInput{
+		Bucket: aws.String(AWSBucket),
+		Key:    aws.String(AWSBucketKey),
+	})
 
-	// defer obj.Body.Close()
-
-	file, err := os.Open("test.jpeg")
 	if err != nil {
-		log.Fatal("[Error] Fail to open the image.")
+		return err.Error(), nil
 	}
-	defer file.Close()
+
+	defer obj.Body.Close()
+
+	bodyByte, err := ioutil.ReadAll(obj.Body)
+	bodyBuffer := bytes.NewBuffer(bodyByte)
 
 	reqBody := &bytes.Buffer{}
 	w := multipart.NewWriter(reqBody)
-	part, err := w.CreateFormFile("image", file.Name())
-	log.Println(file.Name())
-	if _, err := io.Copy(part, file); err != nil {
-		log.Fatal("[Error] Fail to copy the file.")
+	part, err := w.CreateFormFile("image", "main.go")
+	if _, err := io.Copy(part, bodyBuffer); err != nil {
+		return "[Error] Fail to copy the file.", nil
 	}
 	w.Close()
 
 	req, err := http.NewRequest(
 		"POST",
+		// "https://httpbin.org/post", // httpテスト用
 		rootURL+apiMethod,
 		reqBody,
 	)
 
 	if err != nil {
-		log.Fatal("[Error] Fail to generate new Reqest.")
+		return "[Error] Fail to generate new Reqest.", nil
 	}
 
 	req.Header.Set("Content-type", w.FormDataContentType())
@@ -134,23 +79,29 @@ func main() {
 	resp, err := client.Do(req)
 
 	if err != nil {
-		log.Fatal("[Error] Request failed.")
+		return "[Error] Request failed.", nil
 	}
 
 	defer resp.Body.Close()
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		log.Fatal("[Error] Failed to read response.")
+		return "[Error] Failed to read response.", nil
 	}
 
 	var respJSON slackAPIResponse
 	if err = json.Unmarshal(body, &respJSON); err != nil {
-		log.Fatal("[Error] Failed to unmarshal response json.")
+		return "[Error] Failed to unmarshal response json.", nil
 	}
+
+	// log.Println(string(body)) // httpbinでのresp確認用
 
 	if respJSON.Ok {
 		// TODO: Slackに成功or失敗を通知する
-		log.Fatal("Successfully Updated")
+		return "Successfully Updated", nil
 	}
-	log.Fatal("Fail to Update: " + respJSON.Error)
+	return "Fail to Update: " + respJSON.Error, nil
+}
+
+func main() {
+	lambda.Start(setSlackPhotoHandler)
 }
