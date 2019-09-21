@@ -26,7 +26,8 @@ type slackAPIResponse struct {
 
 type weatherAPIResponse struct {
 	Weather []struct {
-		ID int `json:"id"`
+		ID   int    `json:"id"`
+		Main string `json:"main"`
 	}
 }
 
@@ -140,7 +141,8 @@ func getImageName() (string, error) {
 	}
 
 	// 夜は天気に関係なくbokumoon.pngに上書き
-	if h := time.Now().Hour(); h <= 5 || 22 <= h {
+	location, _ := time.LoadLocation("Asia/Tokyo")
+	if h := time.Now().In(location).Hour(); h <= 5 || 22 <= h {
 		imageName = "bokumoon.png"
 	}
 
@@ -159,7 +161,6 @@ func fetchCurrentWeatherID() (int, error) {
 	defer resp.Body.Close()
 
 	body, err := ioutil.ReadAll(resp.Body)
-	log.Println(string(body))
 	if err != nil {
 		return 0, err
 	}
@@ -169,6 +170,7 @@ func fetchCurrentWeatherID() (int, error) {
 		return 0, err
 	}
 
+	log.Printf("Current weather: %s", respJSON.Weather[0].Main)
 	return respJSON.Weather[0].ID, nil
 }
 
