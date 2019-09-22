@@ -31,138 +31,8 @@ type weatherAPIResponse struct {
 	}
 }
 
-func setSlackPhotoHandler() (string, error) {
-	rootURL := "https://slack.com/api/"
-	apiMethod := "users.setPhoto"
-	token := os.Getenv("SLACK_TOKEN")
-	AWSSessionID := os.Getenv("AWS_SESSION_ID")
-	AWSSecretAccessKey := os.Getenv("AWS_SECRET")
-	S3Bucket := os.Getenv("BUCKET")
-	S3BucketKey, err := getImageName()
-
-	if err != nil {
-		return err.Error(), nil
-	}
-
-	log.Printf("Slack token: %s", token)
-	log.Printf("AWS session id: %s", AWSSessionID)
-	log.Printf("AWS secret access key: %s", AWSSecretAccessKey)
-	log.Printf("S3 bucket: %s", S3Bucket)
-	log.Printf("S3 bucket key: %s", S3BucketKey)
-
-	sess := session.Must(session.NewSession())
-	creds := credentials.NewStaticCredentials(AWSSessionID, AWSSecretAccessKey, "")
-
-	svc := s3.New(sess, &aws.Config{
-		Region:      aws.String(endpoints.ApNortheast1RegionID),
-		Credentials: creds,
-	})
-
-	obj, err := svc.GetObject(&s3.GetObjectInput{
-		Bucket: aws.String(S3Bucket),
-		Key:    aws.String(S3BucketKey + ".png"),
-	})
-
-	if err != nil {
-		return "[Error] Fail to get object from s3: " + err.Error(), nil
-	}
-
-	defer obj.Body.Close()
-
-	bodyByte, err := ioutil.ReadAll(obj.Body)
-	bodyBuffer := bytes.NewBuffer(bodyByte)
-
-	reqBody := &bytes.Buffer{}
-	w := multipart.NewWriter(reqBody)
-	part, err := w.CreateFormFile("image", "main.go")
-	if _, err := io.Copy(part, bodyBuffer); err != nil {
-		return "[Error] Fail to copy the file.", nil
-	}
-	w.Close()
-
-	req, err := http.NewRequest(
-		"POST",
-		// "https://httpbin.org/post", // httpテスト用
-		rootURL+apiMethod,
-		reqBody,
-	)
-
-	if err != nil {
-		return "[Error] Fail to generate new Reqest.", nil
-	}
-
-	req.Header.Set("Content-type", w.FormDataContentType())
-	req.Header.Set("Authorization", "Bearer "+token)
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-
-	if err != nil {
-		return "[Error] Request failed.", nil
-	}
-
-	defer resp.Body.Close()
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		return "[Error] Failed to read response.", nil
-	}
-
-	var respJSON slackAPIResponse
-	if err = json.Unmarshal(body, &respJSON); err != nil {
-		return "[Error] Failed to unmarshal response json.", nil
-	}
-
-	// log.Println(string(body)) // httpbinでのresp確認用
-
-	apiMethod = "chat.postMessage"
-	channel := "DDZFYNW95"
-	attatchmentsColor := "#2eb886"
-	attatchmentsText := "Icon updated successfully according to the current weather! :" + S3BucketKey + ":"
-	iconEmoji := ":bokurainy:"
-	username := "bokuweather"
-
-	if respJSON.Ok {
-		jsonStr := `{"channel":"` + channel + `","as_user":false,"attachments":[{"color":"` + attatchmentsColor + `","text":"` + attatchmentsText + `"}],"icon_emoji":"` + iconEmoji + `","username":"` + username + `"}`
-		log.Printf("Request2 JSON: %s", jsonStr)
-
-		req2, err := http.NewRequest("POST", rootURL+apiMethod, bytes.NewBuffer([]byte(jsonStr)))
-		if err != nil {
-			return "[Error] Fail to generate new Reqest.", nil
-		}
-
-		req2.Header.Set("Authorization", "Bearer "+token)
-		req2.Header.Set("Content-Type", "application/json")
-
-		resp2, err := client.Do(req2)
-		if err != nil {
-			return "[Error] Request2 failed.", nil
-		}
-		log.Printf("Request 2 response states: %s", resp2.Status)
-
-		defer resp2.Body.Close()
-		body2, err := ioutil.ReadAll(resp2.Body)
-		if err != nil {
-			return "[Error] Failed to read response 2.", nil
-		}
-
-		var resp2JSON slackAPIResponse
-		if err = json.Unmarshal(body2, &resp2JSON); err != nil {
-			return "[Error] Failed to unmarshal response json.", nil
-		}
-
-		if resp2JSON.Ok {
-			return "Successfully Updated", nil
-		}
-		return "Fail to send image update outcome to slack." + resp2JSON.Error, nil
-	}
-	return "Fail to Update: " + respJSON.Error, nil
-}
-
-func getImageName() (string, error) {
-	currentWeatherID, err := fetchCurrentWeatherID()
-	if err != nil {
-		return "", err
-	}
+func getImageName() string {
+	currentWeatherID := fetchCurrentWeatherID()
 
 	var imageName string
 	// ref: https://openweathermap.org/weather-conditions
@@ -183,34 +53,187 @@ func getImageName() (string, error) {
 		imageName = "bokumoon"
 	}
 
-	return imageName, nil
+	return imageName
 }
 
-func fetchCurrentWeatherID() (int, error) {
+func fetchCurrentWeatherID() int {
+	log.Println("[INFO] Start fetching current weather info from weather api")
+
 	city := "Tokyo"
 	token := os.Getenv("WEATHER_API_TOKEN")
 	apiURL := "https://api.openweathermap.org/data/2.5/weather?q=" + city + "&appid=" + token
 
-	resp, err := http.Get(apiURL)
+	log.Printf("[INFO] Weather api token: %s", token)
+
+	resp, _ := http.Get(apiURL)
+	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		return 0, err
+		postSlackNotifyOutcomeMessage(false)
+		log.Fatalf("[ERROR] Fail to read weather api response body: %s", err.Error())
 	}
 	defer resp.Body.Close()
 
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		return 0, err
-	}
-
 	var respJSON weatherAPIResponse
 	if err = json.Unmarshal(body, &respJSON); err != nil {
-		return 0, err
+		postSlackNotifyOutcomeMessage(false)
+		log.Fatalf("[ERROR] Fail to unmarshal weather api response json: %s", err.Error())
 	}
 
-	log.Printf("Current weather: %s", respJSON.Weather[0].Main)
-	return respJSON.Weather[0].ID, nil
+	log.Printf("[INFO] Current weather: %s", respJSON.Weather[0].Main)
+	return respJSON.Weather[0].ID
+}
+
+func fetchS3ImageObjByName(imageName string) *s3.GetObjectOutput {
+	AWSSessionID := os.Getenv("AWS_SESSION_ID")
+	AWSSecretAccessKey := os.Getenv("AWS_SECRET")
+
+	log.Println("[INFO] Start fetching image obj from S3.")
+	log.Printf("[INFO] AWS session id: %s", AWSSessionID)
+	log.Printf("[INFO] AWS secret access key: %s", AWSSecretAccessKey)
+
+	sess := session.Must(session.NewSession())
+	creds := credentials.NewStaticCredentials(AWSSessionID, AWSSecretAccessKey, "")
+
+	svc := s3.New(sess, &aws.Config{
+		Region:      aws.String(endpoints.ApNortheast1RegionID),
+		Credentials: creds,
+	})
+
+	obj, err := svc.GetObject(&s3.GetObjectInput{
+		Bucket: aws.String("bokuweather"),
+		Key:    aws.String(imageName + ".png"),
+	})
+	if err != nil {
+		postSlackNotifyOutcomeMessage(false)
+		log.Fatalf("[ERROR] Fail to get image object: %s", err.Error())
+	}
+
+	return obj
+}
+
+func postSlackSetPhoto(imgByte []byte) slackAPIResponse {
+	imgBuffer := bytes.NewBuffer(imgByte)
+
+	reqBody := &bytes.Buffer{}
+	w := multipart.NewWriter(reqBody)
+	part, err := w.CreateFormFile("image", "main.go")
+	if _, err := io.Copy(part, imgBuffer); err != nil {
+		postSlackNotifyOutcomeMessage(false)
+		log.Fatalf("[Error] Fail to copy the image: %s", err.Error())
+	}
+	w.Close()
+
+	req, _ := http.NewRequest(
+		"POST",
+		// "https://httpbin.org/post", // httpテスト用
+		"https://slack.com/api/users.setPhoto",
+		reqBody,
+	)
+
+	token := os.Getenv("SLACK_TOKEN")
+	log.Printf("[INFO] Slack token: %s", token)
+
+	req.Header.Set("Content-type", w.FormDataContentType())
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	log.Println("[INFO] Send request to update slack icon!")
+	client := &http.Client{}
+	resp, err := client.Do(req)
+
+	if err != nil {
+		postSlackNotifyOutcomeMessage(false)
+		log.Fatalf("[Error] Something went wrong with the setPhoto reqest : %s", err.Error())
+	}
+	log.Printf("[INFO] SetPhoto response status: %s", resp.Status)
+
+	defer resp.Body.Close()
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		postSlackNotifyOutcomeMessage(false)
+		log.Fatalf("[Error] Fail to read the response: %s", err.Error())
+	}
+
+	var respJSON slackAPIResponse
+	if err = json.Unmarshal(body, &respJSON); err != nil {
+		postSlackNotifyOutcomeMessage(false)
+		log.Fatalf("[Error] Fail to unmarshal the response: %s", err.Error())
+	}
+
+	return respJSON
+}
+
+func postSlackNotifyOutcomeMessage(isSuccess bool) slackAPIResponse {
+	channel := "DDZFYNW95"
+	attatchmentsColor := "good"
+	imageName := getImageName()
+	attatchmentsText := "Icon updated successfully according to the current weather! :" + imageName + ":"
+	iconEmoji := ":bokurainy:"
+	username := "bokuweather"
+
+	if !isSuccess {
+		lambdaCloudWatchURL := "https://ap-northeast-1.console.aws.amazon.com/cloudwatch/home?region=ap-northeast-1#logStream:group=/aws/lambda/bokuweather;streamFilter=typeLogStreamPrefix"
+		attatchmentsColor = "danger"
+		attatchmentsText = "Bokuweather has some problems and needs your help!\nWatch logs: " + lambdaCloudWatchURL
+	}
+
+	jsonStr := `{"channel":"` + channel + `","as_user":false,"attachments":[{"color":"` + attatchmentsColor + `","text":"` + attatchmentsText + `"}],"icon_emoji":"` + iconEmoji + `","username":"` + username + `"}`
+	req, _ := http.NewRequest("POST", "https://slack.com/api/chat.postMessage", bytes.NewBuffer([]byte(jsonStr)))
+
+	req.Header.Set("Authorization", "Bearer "+os.Getenv("SLACK_TOKEN"))
+	req.Header.Set("Content-Type", "application/json")
+
+	log.Printf("[INFO] Send request to notify outcome. isSuccess?: %t", isSuccess)
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Fatalf("[Error] Something went wrong with the postMessage reqest : %s", err.Error())
+	}
+	log.Printf("[INFO] PostMessage response states: %s", resp.Status)
+
+	defer resp.Body.Close()
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		log.Fatalf("[Error] Fail to read the response: %s", err.Error())
+	}
+
+	var respJSON slackAPIResponse
+	if err = json.Unmarshal(body, &respJSON); err != nil {
+		log.Fatalf("[Error] Fail to unmarshal the response: %s", err.Error())
+	}
+
+	return respJSON
+}
+
+func handler() (string, error) {
+	imageName := getImageName()
+	log.Println("[INFO] Successfully got imageName according to weather api.")
+	log.Printf("[INFO] Icon imageName: %s", imageName)
+
+	obj := fetchS3ImageObjByName(imageName)
+	log.Println("[INFO] Successfully fetch the image object from s3.")
+
+	imgByte, err := ioutil.ReadAll(obj.Body)
+	if err != nil {
+		postSlackNotifyOutcomeMessage(false)
+		log.Fatalf("[Error] Fail to read the image object: %s", err.Error())
+	}
+	defer obj.Body.Close()
+
+	// TODO: Twitter api追加時に非同期化
+	setPhotoRespJSON := postSlackSetPhoto(imgByte)
+	if !setPhotoRespJSON.Ok {
+		postSlackNotifyOutcomeMessage(false)
+		log.Fatalf("[ERROR] Something went wrong with setPhoto request: %s", setPhotoRespJSON.Error)
+	}
+
+	postMessageJSON := postSlackNotifyOutcomeMessage(true)
+	if !postMessageJSON.Ok {
+		log.Fatalf("[ERROR] Something went wrong with postMessage request: %s", postMessageJSON.Error)
+	}
+
+	return "Successfully Updated!", nil
 }
 
 func main() {
-	lambda.Start(setSlackPhotoHandler)
+	lambda.Start(handler)
 }
