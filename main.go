@@ -60,7 +60,7 @@ func setSlackPhotoHandler() (string, error) {
 
 	obj, err := svc.GetObject(&s3.GetObjectInput{
 		Bucket: aws.String(S3Bucket),
-		Key:    aws.String(S3BucketKey),
+		Key:    aws.String(S3BucketKey + ".png"),
 	})
 
 	if err != nil {
@@ -114,9 +114,46 @@ func setSlackPhotoHandler() (string, error) {
 
 	// log.Println(string(body)) // httpbinでのresp確認用
 
+	apiMethod = "chat.postMessage"
+	channel := "DDZFYNW95"
+	attatchmentsColor := "#2eb886"
+	attatchmentsText := "Icon updated successfully according to the current weather! :" + S3BucketKey + ":"
+	iconEmoji := ":bokurainy:"
+	username := "bokuweather"
+
 	if respJSON.Ok {
-		// TODO: Slackに成功or失敗を通知する
-		return "Successfully Updated", nil
+		jsonStr := `{"channel":"` + channel + `","as_user":false,"attachments":[{"color":"` + attatchmentsColor + `","text":"` + attatchmentsText + `"}],"icon_emoji":"` + iconEmoji + `","username":"` + username + `"}`
+		log.Printf("Request2 JSON: %s", jsonStr)
+
+		req2, err := http.NewRequest("POST", rootURL+apiMethod, bytes.NewBuffer([]byte(jsonStr)))
+		if err != nil {
+			return "[Error] Fail to generate new Reqest.", nil
+		}
+
+		req2.Header.Set("Authorization", "Bearer "+token)
+		req2.Header.Set("Content-Type", "application/json")
+
+		resp2, err := client.Do(req2)
+		if err != nil {
+			return "[Error] Request2 failed.", nil
+		}
+		log.Printf("Request 2 response states: %s", resp2.Status)
+
+		defer resp2.Body.Close()
+		body2, err := ioutil.ReadAll(resp2.Body)
+		if err != nil {
+			return "[Error] Failed to read response 2.", nil
+		}
+
+		var resp2JSON slackAPIResponse
+		if err = json.Unmarshal(body2, &resp2JSON); err != nil {
+			return "[Error] Failed to unmarshal response json.", nil
+		}
+
+		if resp2JSON.Ok {
+			return "Successfully Updated", nil
+		}
+		return "Fail to send image update outcome to slack." + resp2JSON.Error, nil
 	}
 	return "Fail to Update: " + respJSON.Error, nil
 }
@@ -131,19 +168,19 @@ func getImageName() (string, error) {
 	// ref: https://openweathermap.org/weather-conditions
 	switch {
 	case 200 <= currentWeatherID && currentWeatherID < 300:
-		imageName = "bokuthunder.png"
+		imageName = "bokuthunder"
 	case currentWeatherID < 600:
-		imageName = "bokurainy.png"
+		imageName = "bokurainy"
 	case currentWeatherID < 700:
-		imageName = "bokusnowy.png"
+		imageName = "bokusnowy"
 	default:
-		imageName = "bokusunny.png"
+		imageName = "bokusunny"
 	}
 
-	// 夜は天気に関係なくbokumoon.pngに上書き
+	// 夜は天気に関係なくbokumoonに上書き
 	location, _ := time.LoadLocation("Asia/Tokyo")
 	if h := time.Now().In(location).Hour(); h <= 5 || 22 <= h {
-		imageName = "bokumoon.png"
+		imageName = "bokumoon"
 	}
 
 	return imageName, nil
