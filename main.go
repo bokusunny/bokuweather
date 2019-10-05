@@ -163,7 +163,7 @@ func postSlackSetPhoto(imgByte []byte) slackAPIResponse {
 }
 
 func postSlackNotifyOutcomeMessage(isSuccess bool) slackAPIResponse {
-	channel := "DDZFYNW95"
+	channel := os.Getenv("SLACK_NOTIFY_CHANNEL_ID")
 	attatchmentsColor := "good"
 	imageName := getImageName()
 	attatchmentsText := "Icon updated successfully according to the current weather! :" + imageName + ":"
@@ -173,7 +173,7 @@ func postSlackNotifyOutcomeMessage(isSuccess bool) slackAPIResponse {
 	if !isSuccess {
 		lambdaCloudWatchURL := "https://ap-northeast-1.console.aws.amazon.com/cloudwatch/home?region=ap-northeast-1#logStream:group=/aws/lambda/bokuweather;streamFilter=typeLogStreamPrefix"
 		attatchmentsColor = "danger"
-		attatchmentsText = "Bokuweather has some problems and needs your help!\nWatch logs: " + lambdaCloudWatchURL
+		attatchmentsText = "Bokuweather has some problems and needs your help!:bokuthunder:\nWatch logs: " + lambdaCloudWatchURL
 	}
 
 	jsonStr := `{"channel":"` + channel + `","as_user":false,"attachments":[{"color":"` + attatchmentsColor + `","text":"` + attatchmentsText + `"}],"icon_emoji":"` + iconEmoji + `","username":"` + username + `"}`
