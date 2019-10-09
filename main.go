@@ -17,6 +17,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws/endpoints"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
+	"github.com/dghubble/oauth1"
 )
 
 type slackAPIResponse struct {
@@ -142,7 +143,7 @@ func postSlackSetPhoto(imgByte []byte) slackAPIResponse {
 
 	if err != nil {
 		postSlackNotifyOutcomeMessage(false)
-		log.Fatalf("[Error] Something went wrong with the setPhoto reqest : %s", err.Error())
+		log.Fatalf("[Error] Something went wrong with the slack setPhoto request : %s", err.Error())
 	}
 	log.Printf("[INFO] SetPhoto response status: %s", resp.Status)
 
@@ -160,6 +161,46 @@ func postSlackSetPhoto(imgByte []byte) slackAPIResponse {
 	}
 
 	return respJSON
+}
+
+func postTwitterSetPhoto() int {
+	oauthAPIKey := os.Getenv("OAUTH_CONSUMER_API_KEY")
+	oauthAPIKeySecret := os.Getenv("OAUTH_CONSUMER_SECRET_KEY")
+	oauthAccessToken := os.Getenv("OAUTH_ACCESS_TOKEN")
+	oauthAccessTokenSecret := os.Getenv("OAUTH_ACCESS_TOKEN_SECRET")
+
+	log.Printf("[INFO] Twitter API Key: %s", oauthAPIKey)
+	log.Printf("[INFO] Twitter API Secret Key: %s", oauthAPIKeySecret)
+	log.Printf("[INFO] Twitter Access Token: %s", oauthAccessToken)
+	log.Printf("[INFO] Twitter Secret Access Token: %s", oauthAccessTokenSecret)
+
+	config := oauth1.NewConfig(oauthAPIKey, oauthAPIKeySecret)
+	token := oauth1.NewToken(oauthAccessToken, oauthAccessTokenSecret)
+
+	httpClient := config.Client(oauth1.NoContext, token)
+
+	twitterAPIRootURL := "https://api.twitter.com"
+	twitterAPIMethod := "/1.1/statuses/update.json"
+	URLParams := "?status=hello"
+
+	req, _ := http.NewRequest(
+		"POST",
+		twitterAPIRootURL+twitterAPIMethod+URLParams,
+		nil,
+	)
+	req.Header.Set("Content-Type", "application/json")
+
+	log.Println("[INFO] Send request to update twitter icon!")
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		postSlackNotifyOutcomeMessage(false)
+		log.Fatalf("[Error] Something went wrong with the twitter request : %s", err.Error())
+	}
+	defer resp.Body.Close()
+
+	log.Printf("[INFO] Twitter updateImage response status: %s", resp.Status)
+
+	return resp.StatusCode
 }
 
 func postSlackNotifyOutcomeMessage(isSuccess bool) slackAPIResponse {
@@ -220,10 +261,18 @@ func handler() (string, error) {
 	defer obj.Body.Close()
 
 	// TODO: Twitter api追加時に非同期化
+	// TODO: JSON返すんじゃなくてstatusだけでOK
 	setPhotoRespJSON := postSlackSetPhoto(imgByte)
 	if !setPhotoRespJSON.Ok {
 		postSlackNotifyOutcomeMessage(false)
 		log.Fatalf("[ERROR] Something went wrong with setPhoto request: %s", setPhotoRespJSON.Error)
+	}
+
+	statusCode := postTwitterSetPhoto()
+
+	if statusCode != 200 {
+		postSlackNotifyOutcomeMessage(false)
+		log.Fatal("[ERROR] Something went wrong with twitter request.")
 	}
 
 	postMessageJSON := postSlackNotifyOutcomeMessage(true)
