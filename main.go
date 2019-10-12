@@ -2,12 +2,14 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"io/ioutil"
 	"log"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"os"
 	"time"
 
@@ -112,7 +114,7 @@ func fetchS3ImageObjByName(imageName string) *s3.GetObjectOutput {
 	return obj
 }
 
-func postSlackSetPhoto(imgByte []byte) slackAPIResponse {
+func postSlackSetPhoto(imgByte []byte) int {
 	imgBuffer := bytes.NewBuffer(imgByte)
 
 	reqBody := &bytes.Buffer{}
@@ -160,10 +162,15 @@ func postSlackSetPhoto(imgByte []byte) slackAPIResponse {
 		log.Fatalf("[Error] Fail to unmarshal the response: %s", err.Error())
 	}
 
-	return respJSON
+	if !respJSON.Ok {
+		postSlackNotifyOutcomeMessage(false)
+		log.Fatalf("[ERROR] Something went wrong with setPhoto request: %s", respJSON.Error)
+	}
+
+	return resp.StatusCode
 }
 
-func postTwitterSetPhoto() int {
+func postTwitterSetPhoto(imgByte []byte) int {
 	oauthAPIKey := os.Getenv("OAUTH_CONSUMER_API_KEY")
 	oauthAPIKeySecret := os.Getenv("OAUTH_CONSUMER_SECRET_KEY")
 	oauthAccessToken := os.Getenv("OAUTH_ACCESS_TOKEN")
@@ -179,16 +186,19 @@ func postTwitterSetPhoto() int {
 
 	httpClient := config.Client(oauth1.NoContext, token)
 
+	encodedImg := base64.StdEncoding.EncodeToString(imgByte)
+	encodedImg = url.QueryEscape(encodedImg) // replace URL encoding reserved characters
+	log.Printf("Encoded icon: %s", encodedImg)
+
 	twitterAPIRootURL := "https://api.twitter.com"
-	twitterAPIMethod := "/1.1/statuses/update.json"
-	URLParams := "?status=hello"
+	twitterAPIMethod := "/1.1/account/update_profile_image.json"
+	URLParams := "?image=" + encodedImg
 
 	req, _ := http.NewRequest(
 		"POST",
 		twitterAPIRootURL+twitterAPIMethod+URLParams,
 		nil,
 	)
-	req.Header.Set("Content-Type", "application/json")
 
 	log.Println("[INFO] Send request to update twitter icon!")
 	resp, err := httpClient.Do(req)
@@ -261,18 +271,18 @@ func handler() (string, error) {
 	defer obj.Body.Close()
 
 	// TODO: Twitter api追加時に非同期化
-	// TODO: JSON返すんじゃなくてstatusだけでOK
-	setPhotoRespJSON := postSlackSetPhoto(imgByte)
-	if !setPhotoRespJSON.Ok {
+	slackAPIStatusCode := postSlackSetPhoto(imgByte)
+
+	twitterAPIStatusCode := postTwitterSetPhoto(imgByte)
+
+	if slackAPIStatusCode != 200 {
 		postSlackNotifyOutcomeMessage(false)
-		log.Fatalf("[ERROR] Something went wrong with setPhoto request: %s", setPhotoRespJSON.Error)
+		log.Fatal("[ERROR] Something went wrong with slack updateImage func.")
 	}
 
-	statusCode := postTwitterSetPhoto()
-
-	if statusCode != 200 {
+	if twitterAPIStatusCode != 200 {
 		postSlackNotifyOutcomeMessage(false)
-		log.Fatal("[ERROR] Something went wrong with twitter request.")
+		log.Fatal("[ERROR] Something went wrong with twitter updateImage func.")
 	}
 
 	postMessageJSON := postSlackNotifyOutcomeMessage(true)
