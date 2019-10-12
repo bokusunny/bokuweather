@@ -34,6 +34,11 @@ type weatherAPIResponse struct {
 	}
 }
 
+type apiResult struct {
+	Type       string `json:"type"`
+	StatusCode int    `json:"status_code"`
+}
+
 func getImageName() string {
 	currentWeatherID := fetchCurrentWeatherID()
 
@@ -71,14 +76,14 @@ func fetchCurrentWeatherID() int {
 	resp, _ := http.Get(apiURL)
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		postSlackNotifyOutcomeMessage(false)
+		notifyAPIResultToSlack(false)
 		log.Fatalf("[ERROR] Fail to read weather api response body: %s", err.Error())
 	}
 	defer resp.Body.Close()
 
 	var respJSON weatherAPIResponse
 	if err = json.Unmarshal(body, &respJSON); err != nil {
-		postSlackNotifyOutcomeMessage(false)
+		notifyAPIResultToSlack(false)
 		log.Fatalf("[ERROR] Fail to unmarshal weather api response json: %s", err.Error())
 	}
 
@@ -107,21 +112,21 @@ func fetchS3ImageObjByName(imageName string) *s3.GetObjectOutput {
 		Key:    aws.String(imageName + ".png"),
 	})
 	if err != nil {
-		postSlackNotifyOutcomeMessage(false)
+		notifyAPIResultToSlack(false)
 		log.Fatalf("[ERROR] Fail to get image object: %s", err.Error())
 	}
 
 	return obj
 }
 
-func postSlackSetPhoto(imgByte []byte) int {
+func updateSlackIcon(imgByte []byte, c chan apiResult) {
 	imgBuffer := bytes.NewBuffer(imgByte)
 
 	reqBody := &bytes.Buffer{}
 	w := multipart.NewWriter(reqBody)
 	part, err := w.CreateFormFile("image", "main.go")
 	if _, err := io.Copy(part, imgBuffer); err != nil {
-		postSlackNotifyOutcomeMessage(false)
+		notifyAPIResultToSlack(false)
 		log.Fatalf("[Error] Fail to copy the image: %s", err.Error())
 	}
 	w.Close()
@@ -144,7 +149,7 @@ func postSlackSetPhoto(imgByte []byte) int {
 	resp, err := client.Do(req)
 
 	if err != nil {
-		postSlackNotifyOutcomeMessage(false)
+		notifyAPIResultToSlack(false)
 		log.Fatalf("[Error] Something went wrong with the slack setPhoto request : %s", err.Error())
 	}
 	log.Printf("[INFO] SetPhoto response status: %s", resp.Status)
@@ -152,25 +157,25 @@ func postSlackSetPhoto(imgByte []byte) int {
 	defer resp.Body.Close()
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		postSlackNotifyOutcomeMessage(false)
+		notifyAPIResultToSlack(false)
 		log.Fatalf("[Error] Fail to read the response: %s", err.Error())
 	}
 
 	var respJSON slackAPIResponse
 	if err = json.Unmarshal(body, &respJSON); err != nil {
-		postSlackNotifyOutcomeMessage(false)
+		notifyAPIResultToSlack(false)
 		log.Fatalf("[Error] Fail to unmarshal the response: %s", err.Error())
 	}
 
 	if !respJSON.Ok {
-		postSlackNotifyOutcomeMessage(false)
+		notifyAPIResultToSlack(false)
 		log.Fatalf("[ERROR] Something went wrong with setPhoto request: %s", respJSON.Error)
 	}
 
-	return resp.StatusCode
+	c <- apiResult{"slack", resp.StatusCode}
 }
 
-func postTwitterSetPhoto(imgByte []byte) int {
+func updateTwitterIcon(imgByte []byte, c chan apiResult) {
 	oauthAPIKey := os.Getenv("OAUTH_CONSUMER_API_KEY")
 	oauthAPIKeySecret := os.Getenv("OAUTH_CONSUMER_SECRET_KEY")
 	oauthAccessToken := os.Getenv("OAUTH_ACCESS_TOKEN")
@@ -203,17 +208,17 @@ func postTwitterSetPhoto(imgByte []byte) int {
 	log.Println("[INFO] Send request to update twitter icon!")
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		postSlackNotifyOutcomeMessage(false)
+		notifyAPIResultToSlack(false)
 		log.Fatalf("[Error] Something went wrong with the twitter request : %s", err.Error())
 	}
 	defer resp.Body.Close()
 
 	log.Printf("[INFO] Twitter updateImage response status: %s", resp.Status)
 
-	return resp.StatusCode
+	c <- apiResult{"twitter", resp.StatusCode}
 }
 
-func postSlackNotifyOutcomeMessage(isSuccess bool) slackAPIResponse {
+func notifyAPIResultToSlack(isSuccess bool) slackAPIResponse {
 	channel := os.Getenv("SLACK_NOTIFY_CHANNEL_ID")
 	attatchmentsColor := "good"
 	imageName := getImageName()
@@ -265,27 +270,23 @@ func handler() (string, error) {
 
 	imgByte, err := ioutil.ReadAll(obj.Body)
 	if err != nil {
-		postSlackNotifyOutcomeMessage(false)
+		notifyAPIResultToSlack(false)
 		log.Fatalf("[Error] Fail to read the image object: %s", err.Error())
 	}
 	defer obj.Body.Close()
 
-	// TODO: Twitter api追加時に非同期化
-	slackAPIStatusCode := postSlackSetPhoto(imgByte)
+	c := make(chan apiResult, 1)
 
-	twitterAPIStatusCode := postTwitterSetPhoto(imgByte)
+	go updateSlackIcon(imgByte, c)
+	go updateTwitterIcon(imgByte, c)
 
-	if slackAPIStatusCode != 200 {
-		postSlackNotifyOutcomeMessage(false)
-		log.Fatal("[ERROR] Something went wrong with slack updateImage func.")
+	result1, result2 := <-c, <-c
+	if result1.StatusCode != 200 || result2.StatusCode != 200 {
+		notifyAPIResultToSlack(false)
+		log.Fatalf("[ERROR] Something went wrong with updateImage func.")
 	}
 
-	if twitterAPIStatusCode != 200 {
-		postSlackNotifyOutcomeMessage(false)
-		log.Fatal("[ERROR] Something went wrong with twitter updateImage func.")
-	}
-
-	postMessageJSON := postSlackNotifyOutcomeMessage(true)
+	postMessageJSON := notifyAPIResultToSlack(true)
 	if !postMessageJSON.Ok {
 		log.Fatalf("[ERROR] Something went wrong with postMessage request: %s", postMessageJSON.Error)
 	}
