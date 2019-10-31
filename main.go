@@ -57,8 +57,18 @@ func getImageName() string {
 
 	// 夜は天気に関係なくbokumoonに上書き
 	location, _ := time.LoadLocation("Asia/Tokyo")
-	if h := time.Now().In(location).Hour(); h <= 5 || 22 <= h {
+	localTime := time.Now().In(location)
+	if h := localTime.Hour(); h <= 5 || 22 <= h {
 		imageName = "bokumoon"
+	}
+
+	// イベントがある日は天気、時刻に関係なく上書き
+	if _, m, d := localTime.Date(); m == 10 && d == 31 {
+		imageName = "halloween_pumpkin"
+	} else if m == 12 && d == 25 {
+		imageName = "christmas_mark6_tonakai"
+	} else if m == 2 && d == 3 {
+		imageName = "setsubun_akaoni"
 	}
 
 	return imageName
@@ -220,19 +230,19 @@ func updateTwitterIcon(imgByte []byte, c chan apiResult) {
 
 func notifyAPIResultToSlack(isSuccess bool) slackAPIResponse {
 	channel := os.Getenv("SLACK_NOTIFY_CHANNEL_ID")
-	attatchmentsColor := "good"
+	attachmentsColor := "good"
 	imageName := getImageName()
-	attatchmentsText := "Icon updated successfully according to the current weather! :" + imageName + ":"
+	attachmentsText := "Icon updated successfully according to the current weather! :" + imageName + ":"
 	iconEmoji := ":bokurainy:"
 	username := "bokuweather"
 
 	if !isSuccess {
 		lambdaCloudWatchURL := "https://ap-northeast-1.console.aws.amazon.com/cloudwatch/home?region=ap-northeast-1#logStream:group=/aws/lambda/bokuweather;streamFilter=typeLogStreamPrefix"
-		attatchmentsColor = "danger"
-		attatchmentsText = "Bokuweather has some problems and needs your help!:bokuthunder:\nWatch logs: " + lambdaCloudWatchURL
+		attachmentsColor = "danger"
+		attachmentsText = "Bokuweather has some problems and needs your help!:bokuthunder:\nWatch logs: " + lambdaCloudWatchURL
 	}
 
-	jsonStr := `{"channel":"` + channel + `","as_user":false,"attachments":[{"color":"` + attatchmentsColor + `","text":"` + attatchmentsText + `"}],"icon_emoji":"` + iconEmoji + `","username":"` + username + `"}`
+	jsonStr := `{"channel":"` + channel + `","as_user":false,"attachments":[{"color":"` + attachmentsColor + `","text":"` + attachmentsText + `"}],"icon_emoji":"` + iconEmoji + `","username":"` + username + `"}`
 	req, _ := http.NewRequest("POST", "https://slack.com/api/chat.postMessage", bytes.NewBuffer([]byte(jsonStr)))
 
 	req.Header.Set("Authorization", "Bearer "+os.Getenv("SLACK_TOKEN"))
